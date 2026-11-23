@@ -2,7 +2,6 @@ import os
 import re
 import sys
 import logging
-
 from telegram import Update
 from telegram.constants import ParseMode
 from telegram.ext import Application, MessageHandler, filters
@@ -24,27 +23,28 @@ SALAM_PATTERN = re.compile(
 )
 REPLY_TEXT = "علیکم السلام 🌹"
 
-
 async def handle_message(update: Update, context) -> None:
     msg = update.effective_message
     if not msg or not msg.text:
         return
-    if not update.effective_chat or update.effective_chat.type not in ("group", "supergroup"):
+        
+    if update.effective_chat.type not in ("group", "supergroup"):
         return
+        
     if msg.from_user and msg.from_user.is_bot:
         return
+        
     if SALAM_PATTERN.match(msg.text):
         try:
+            # ✅ اصلاح خطا: حذف پارامتر allow_sending_without_reply
             await msg.reply_text(
                 REPLY_TEXT,
                 parse_mode=ParseMode.HTML,
-                reply_to_message_id=msg.message_id,
-                allow_sending_without_reply=True,
+                reply_to_message_id=msg.message_id
             )
-            logger.info("replied | chat=%s", update.effective_chat.id)
+            logger.info("✅ پاسخ داده شد!")
         except Exception as exc:
-            logger.exception("error: %s", exc)
-
+            logger.exception(f"❌ خطا در ارسال: {exc}")
 
 def main() -> None:
     application = (
@@ -63,7 +63,6 @@ def main() -> None:
         close_loop=False,
         stop_signals=None,
     )
-
 
 if __name__ == "__main__":
     main()
