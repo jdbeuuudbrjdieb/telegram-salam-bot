@@ -1,564 +1,322 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# 🏢 AFGHAN JOB FINDER - ULTIMATE ENTERPRISE EDITION (v5.2 Fixed)
+# 🚀 AFGHAN JOB SAAS PLATFORM - AI AGENT & MONETIZATION EDITION (v6.0)
 # ══════════════════════════════════════════════════════════════════════════════
-# 📌 توضیحات: سیستم‌عامل کاریابی هوشمند با دیتابیس ابری گیت‌هاب
-# 🛡️ امنیت: تمامی توکن‌ها از Secrets خوانده می‌شوند (بدون هاردکد)
-# 🧠 هوش مصنوعی: اصلاح املایی، دسته‌بندی خودکار
-# 👑 مدیریت: پنل اختصاصی مالک (فقط برای OWNER_ID)
+# 💰 کسب درآمد: از طریق خرید ستاره تلگرام (برای آگهی ویژه و VIP)
+# 🧠 ایجنت هوش مصنوعی: ساخت رزومه کارجو و دستیار نگارش آگهی برای کارفرما
+# 🎨 رابط کاربری: کاملاً دکمه‌ای (بدون نیاز به تایپ طولانی)
 # ══════════════════════════════════════════════════════════════════════════════
 
-import os
-import sys
-import json
-import logging
-import requests
-import asyncio
-import base64
-import time
+import os, sys, json, logging, requests, asyncio, base64, time
 from datetime import datetime
-from typing import Optional, Dict, List, Any
+from typing import Optional, Dict, Any
 
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import (
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice,
+    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+)
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ChatMemberHandler, filters, ContextTypes
+    ChatMemberHandler, PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
 )
 from telegram.constants import ParseMode
-from telegram.error import TelegramError, BadRequest
+from telegram.error import TelegramError
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۱. تنظیمات و متغیرهای محیطی (خوانده شده از Secrets)
+# ۱. پیکربندی و امنیت
 # ══════════════════════════════════════════════════════════════════════════════
-logging.basicConfig(
-    format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
-    level=logging.INFO,
-)
-logger = logging.getLogger("JobFinderEnterprise")
+logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(message)s", level=logging.INFO)
+logger = logging.getLogger("JobSaaS")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GH_PAT = os.getenv("GH_PAT", "")
 GH_REPO = os.getenv("GITHUB_REPOSITORY", "")
 OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 MAIN_CHANNEL_ID = int(os.getenv("MAIN_CHANNEL_ID", "0"))
-MAIN_CHANNEL_LINK = os.getenv("MAIN_CHANNEL_LINK", "https://t.me/")
+MAIN_CHANNEL_LINK = os.getenv("MAIN_CHANNEL_LINK", "")
 OWNER_USERNAME = os.getenv("OWNER_USERNAME", "Admin")
 
-if not BOT_TOKEN or not OWNER_ID or not MAIN_CHANNEL_ID:
-    logger.critical("❌ متغیرهای محیطی ناقص هستند. لطفا Secrets را بررسی کنید.")
-    sys.exit(1)
-
 # ══════════════════════════════════════════════════════════════════════════════
-# ۲. لایه دیتابیس ابری (GitHub Cloud DB)
+# ۲. دیتابیس ابری (مغز ربات)
 # ══════════════════════════════════════════════════════════════════════════════
-class CloudDatabase:
-    def __init__(self, token: str, repo: str):
-        self.token = token
-        self.repo = repo
-        self.headers = {
-            "Authorization": f"Bearer {token}",
-            "Accept": "application/vnd.github.v3+json"
-        }
-        self.sha: Optional[str] = None
-        self.data: Dict[str, Any] = self._load_initial_data()
-        self.lock = asyncio.Lock()
+class CloudDB:
+    def __init__(self, token, repo):
+        self.token, self.repo = token, repo
+        self.headers = {"Authorization": f"Bearer {token}", "Accept": "application/vnd.github.v3+json"}
+        self.sha, self.lock = None, asyncio.Lock()
+        self.data = self._load()
 
-    def _load_initial_data(self) -> Dict[str, Any]:
-        if not self.token or not self.repo:
-            return self._get_default_schema()
+    def _load(self):
+        if not self.token or not self.repo: return self._default()
         try:
-            url = f"https://api.github.com/repos/{self.repo}/contents/db.json"
-            res = requests.get(url, headers=self.headers, timeout=15)
+            res = requests.get(f"https://api.github.com/repos/{self.repo}/contents/db.json", headers=self.headers, timeout=10)
             if res.status_code == 200:
                 self.sha = res.json()["sha"]
-                content = base64.b64decode(res.json()["content"]).decode("utf-8")
-                return json.loads(content)
-            return self._get_default_schema()
-        except Exception as e:
-            logger.error(f"❌ خطا در خواندن دیتابیس: {e}")
-            return self._get_default_schema()
+                return json.loads(base64.b64decode(res.json()["content"]).decode("utf-8"))
+        except Exception: pass
+        return self._default()
 
-    def _get_default_schema(self) -> Dict[str, Any]:
-        return {
-            "users": {},
-            "jobs": {},
-            "settings": {"auto_approve": False, "max_free_ads": 3, "ad_expiry_days": 7},
-            "stats": {"total_jobs_posted": 0, "total_users": 0}
-        }
+    def _default(self):
+        return {"users": {}, "jobs": {}, "stats": {"revenue": 0}}
 
-    async def save(self) -> None:
+    async def save(self):
         if not self.token or not self.repo: return
         async with self.lock:
             try:
-                url = f"https://api.github.com/repos/{self.repo}/contents/db.json"
-                content_encoded = base64.b64encode(
-                    json.dumps(self.data, ensure_ascii=False, indent=2).encode("utf-8")
-                ).decode("utf-8")
-                
-                payload = {"message": "🤖 Auto-update DB", "content": content_encoded}
-                if self.sha:
-                    payload["sha"] = self.sha
-
+                content = base64.b64encode(json.dumps(self.data, ensure_ascii=False).encode()).decode()
+                payload = {"message": "DB Sync", "content": content}
+                if self.sha: payload["sha"] = self.sha
                 loop = asyncio.get_event_loop()
-                res = await loop.run_in_executor(
-                    None, lambda: requests.put(url, headers=self.headers, json=payload, timeout=15)
-                )
-                if res.status_code in (200, 201):
-                    self.sha = res.json()["content"]["sha"]
-            except Exception as e:
-                logger.error(f"❌ خطا در ذخیره دیتابیس: {e}")
+                res = await loop.run_in_executor(None, lambda: requests.put(f"https://api.github.com/repos/{self.repo}/contents/db.json", headers=self.headers, json=payload, timeout=10))
+                if res.status_code in (200, 201): self.sha = res.json()["content"]["sha"]
+            except Exception as e: logger.error(f"DB Save Error: {e}")
 
-db = CloudDatabase(GH_PAT, GH_REPO)
-
-# 🛡️ اطمینان از وجود کلیدهای اصلی در دیتابیس (حل قطعی خطای KeyError)
-if "users" not in db.data: db.data["users"] = {}
-if "jobs" not in db.data: db.data["jobs"] = {}
-if "settings" not in db.data: db.data["settings"] = {"auto_approve": False, "max_free_ads": 3, "ad_expiry_days": 7}
-if "stats" not in db.data: db.data["stats"] = {"total_jobs_posted": 0, "total_users": 0}
-
+db = CloudDB(GH_PAT, GH_REPO)
+for k in ["users", "jobs", "stats"]:
+    if k not in db.data: db.data[k] = {}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۳. متغیرهای سراسری
+# ۳. ایجنت هوش مصنوعی (AI Agent)
 # ══════════════════════════════════════════════════════════════════════════════
-user_states: Dict[int, Dict[str, Any]] = {}
-flood_control: Dict[int, List[float]] = {}
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ۴. موتور هوش مصنوعی
-# ══════════════════════════════════════════════════════════════════════════════
-async def ai_process_job(title: str, desc: str) -> Dict[str, str]:
+async def ai_request(system_prompt, user_text):
     url = "https://text.pollinations.ai/openai"
-    system_prompt = (
-        "You are an expert HR manager. I will give you a job title and description. "
-        "1. Fix spelling mistakes. "
-        "2. Categorize strictly into: [IT, Sales, Engineering, Medical, Education, Admin, Services, Other]. "
-        "3. Output MUST be a valid JSON object with keys: 'fixed_title', 'fixed_desc', 'category'. "
-        "Do NOT output any markdown or extra text. ONLY JSON."
-    )
-    payload = {
-        "model": "openai",
-        "messages": [
-            {"role": "system", "content": system_prompt},
-            {"role": "user", "content": f"Title: {title}\nDescription: {desc}"}
-        ],
-        "temperature": 0.3
-    }
-    
+    payload = {"model": "openai", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}]}
     try:
         loop = asyncio.get_event_loop()
-        res = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, timeout=25))
-        if res.status_code == 200:
-            raw_text = res.json()["choices"][0]["message"]["content"]
-            start, end = raw_text.find('{'), raw_text.rfind('}') + 1
-            if start != -1 and end != -1:
-                parsed = json.loads(raw_text[start:end])
-                return {
-                    "title": parsed.get("fixed_title", title),
-                    "desc": parsed.get("fixed_desc", desc),
-                    "category": parsed.get("category", "Other")
-                }
-    except Exception as e:
-        logger.error(f"AI Error: {e}")
-    return {"title": title, "desc": desc, "category": "Other"}
+        res = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, timeout=20))
+        if res.status_code == 200: return res.json()["choices"][0]["message"]["content"]
+    except Exception as e: logger.error(f"AI Error: {e}")
+    return None
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۵. توابع کمکی
+# ۴. وضعیت‌ها (Conversation States)
 # ══════════════════════════════════════════════════════════════════════════════
-async def is_channel_member(user_id: int, context: ContextTypes.DEFAULT_TYPE) -> bool:
-    try:
-        member = await context.bot.get_chat_member(MAIN_CHANNEL_ID, user_id)
-        return member.status not in ["left", "kicked"]
-    except Exception:
-        return False
-
-def check_flood(user_id: int) -> bool:
-    now = time.time()
-    if user_id not in flood_control:
-        flood_control[user_id] = []
-    flood_control[user_id] = [t for t in flood_control[user_id] if now - t < 10]
-    flood_control[user_id].append(now)
-    return len(flood_control[user_id]) > 5
-
-def get_user_data(user_id: int) -> Dict[str, Any]:
-    uid = str(user_id)
-    if uid not in db.data["users"]:
-        db.data["users"][uid] = {
-            "username": "",
-            "credits": 0,
-            "is_banned": False,
-        }
-        db.data["stats"]["total_users"] += 1
-    return db.data["users"][uid]
-
-def get_user_weekly_quota(user_id: int) -> int:
-    uid = str(user_id)
-    now = time.time()
-    return sum(1 for job in db.data["jobs"].values() if job["owner_id"] == uid and (now - job["timestamp"]) < (7 * 86400))
-
-async def safe_edit_message(query, text: str, reply_markup=None):
-    try:
-        await query.message.edit_text(text, reply_markup=reply_markup, parse_mode=ParseMode.MARKDOWN)
-    except BadRequest as e:
-        if "Message is not modified" not in str(e):
-            logger.error(f"Edit Message Error: {e}")
+(ASK_ROLE, JOB_TITLE, JOB_COMPANY, JOB_DESC, JOB_CONTACT, 
+ RES_NAME, RES_SKILLS, RES_EXP, RES_CONTACT) = range(9)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۶. سیستم ضد سوءاستفاده
+# ۵. رابط کاربری اصلی (UI)
 # ══════════════════════════════════════════════════════════════════════════════
-async def anti_abuse_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_member = update.my_chat_member
-    if not chat_member: return
-    chat_id = update.effective_chat.id
-    if chat_member.new_chat_member.status in ["member", "administrator"]:
-        if chat_id != MAIN_CHANNEL_ID:
-            try: await context.bot.leave_chat(chat_id)
-            except: pass
+async def is_member(uid, ctx):
+    try: return (await ctx.bot.get_chat_member(MAIN_CHANNEL_ID, uid)).status not in ["left", "kicked"]
+    except: return False
 
-# ══════════════════════════════════════════════════════════════════════════════
-# ۷. منوی اصلی
-# ══════════════════════════════════════════════════════════════════════════════
-async def cmd_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = update.effective_user.id
+    if not await is_member(uid, context):
+        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=MAIN_CHANNEL_LINK)], [InlineKeyboardButton("✅ تایید", callback_data="check_join")]]
+        return await update.message.reply_text("⚠️ ابتدا در کانال عضو شوید:", reply_markup=InlineKeyboardMarkup(kb))
+
+    if str(uid) not in db.data["users"]:
+        db.data["users"][str(uid)] = {"vip": False, "stars": 0}
+        await db.save()
+
+    u = db.data["users"][str(uid)]
+    vip_status = "🌟 ویژه" if u.get("vip") else "👤 عادی"
     
-    if not await is_channel_member(user_id, context):
-        kb = [
-            [InlineKeyboardButton("📢 عضویت در کانال اصلی", url=MAIN_CHANNEL_LINK)],
-            [InlineKeyboardButton("✅ تایید عضویت", callback_data="check_join")]
-        ]
-        return await update.message.reply_text("⚠️ برای استفاده از ربات، ابتدا باید در کانال ما عضو شوید:", reply_markup=InlineKeyboardMarkup(kb))
+    kb = [
+        [InlineKeyboardButton("💼 ثبت آگهی (کارفرما)", callback_data="role_employer")],
+        [InlineKeyboardButton("📄 ساخت رزومه با AI (کارجو)", callback_data="role_seeker")],
+        [InlineKeyboardButton("🔍 جستجوی آگهی‌ها", callback_data="search_jobs")],
+        [InlineKeyboardButton("💎 خرید اشتراک VIP (ستاره)", callback_data="buy_vip")],
+    ]
+    if uid == OWNER_ID:
+        kb.append([InlineKeyboardButton("👑 پنل مدیریت", callback_data="owner_panel")])
 
-    user_data = get_user_data(user_id)
-    user_data["username"] = update.effective_user.username or update.effective_user.first_name
+    text = f"سلام {update.effective_user.first_name}! 🌹\nبه پلتفرم هوشمند کاریابی خوش آمدید.\n\nوضعیت شما: {vip_status}"
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
+
+async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if await is_member(q.from_user.id, context):
+        await q.answer("✅ تایید شد! لطفا /start را بزنید.", show_alert=True)
+    else: await q.answer("❌ هنوز عضو نشده‌اید!", show_alert=True)
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ۶. سیستم پرداخت (Telegram Stars) - کسب درآمد!
+# ══════════════════════════════════════════════════════════════════════════════
+async def buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await context.bot.send_invoice(
+        chat_id=q.from_user.id,
+        title="اشتراک ویژه VIP",
+        description="ثبت نامحدود آگهی + پین شدن خودکار + نشان ویژه 🌟",
+        payload="vip_subscription",
+        provider_token="", # برای ستاره تلگرام خالی است
+        currency="XTR", # واحد پول: ستاره تلگرام
+        prices=[LabeledPrice("اشتراک یک ماهه", 50)] # ۵۰ ستاره
+    )
+
+async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.pre_checkout_query.answer(ok=True)
+
+async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    if uid in db.data["users"]:
+        db.data["users"][uid]["vip"] = True
+        db.data["stats"]["revenue"] += 50
+        await db.save()
+    await update.message.reply_text("✅ پرداخت موفق! اشتراک VIP شما فعال شد. 🌟")
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ۷. ویزارد ثبت آگهی (مخصوص کارفرما)
+# ══════════════════════════════════════════════════════════════════════════════
+async def role_employer(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_text("📝 **عنوان شغل** را وارد کنید (مثلاً: برنامه‌نویس):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو ❌", callback_data="cancel")]]))
+    return JOB_TITLE
+
+async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['title'] = update.message.text
+    await update.message.reply_text("🏢 نام **شرکت** را وارد کنید:")
+    return JOB_COMPANY
+
+async def get_company(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['company'] = update.message.text
+    await update.message.reply_text("📝 **توضیحات** و شرایط شغل را بنویسید:\n*(هوش مصنوعی آن را اصلاح و دسته‌بندی می‌کند)*")
+    return JOB_DESC
+
+async def get_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['desc'] = update.message.text
+    await update.message.reply_text("📞 راه **ارتباطی** (شماره یا آیدی):")
+    return JOB_CONTACT
+
+async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    uid = str(update.effective_user.id)
+    contact = update.message.text
+    msg = await update.message.reply_text("⏳ **ایجنت هوش مصنوعی در حال پردازش...**")
+    
+    # ایجنت اصلاح و دسته‌بندی
+    sys_prompt = "Fix spelling and categorize into: IT, Sales, Engineering, Medical, Education, Admin, Services, Other. Output JSON: {'title':'','desc':'','category':''}"
+    res = await ai_request(sys_prompt, f"Title:{context.user_data['title']}\nDesc:{context.user_data['desc']}")
+    
+    try:
+        data = json.loads(res[res.find('{'):res.rfind('}')+1])
+        title, desc, cat = data.get('title'), data.get('desc'), data.get('category', 'Other')
+    except:
+        title, desc, cat = context.user_data['title'], context.user_data['desc'], "Other"
+
+    is_vip = db.data["users"].get(uid, {}).get("vip", False)
+    job_id = f"job_{int(time.time())}_{uid}"
+    
+    db.data["jobs"][job_id] = {
+        "uid": uid, "title": title, "company": context.user_data['company'],
+        "desc": desc, "cat": cat, "contact": contact, "time": time.time(), "vip": is_vip
+    }
     await db.save()
 
-    quota_left = max(0, db.data["settings"]["max_free_ads"] - get_user_weekly_quota(user_id))
-
-    kb = [
-        [InlineKeyboardButton("📝 ثبت آگهی شغلی جدید", callback_data="post_job")],
-        [InlineKeyboardButton("🔍 جستجوی آگهی‌ها", callback_data="search_jobs")],
-        [InlineKeyboardButton("🌟 امکانات ویژه (پولی)", callback_data="premium")],
-    ]
+    # ارسال به کانال
+    badge = "🌟 **ویژه** 🌟\n" if is_vip else ""
+    text = f"{badge}💼 **فرصت شغلی**\n🔹 {title}\n🏢 {context.user_data['company']}\n🗂 {cat}\n\n📝 {desc}\n📞 {contact}"
     
-    # دکمه پنل مالک فقط برای شخص شما
-    if user_id == OWNER_ID:
-        kb.append([InlineKeyboardButton("👑 پنل مدیریت (مخصوص مالک)", callback_data="admin_panel")])
+    channel_msg = await context.bot.send_message(MAIN_CHANNEL_ID, text, parse_mode=ParseMode.MARKDOWN)
+    if is_vip: await context.bot.pin_chat_message(MAIN_CHANNEL_ID, channel_msg.message_id)
 
-    text = (
-        f"سلام {update.effective_user.first_name} عزیز! 🌹\n"
-        f"به **سیستم کاریابی افغان** خوش آمدید.\n\n"
-        f"🔹 **سهمیه رایگان:** {quota_left} از {db.data['settings']['max_free_ads']} آگهی\n"
-        f"🔹 **اعتبار پولی:** {user_data['credits']} واحد\n\n"
-        f"لطفاً یک گزینه را انتخاب کنید:"
-    )
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
-
-async def cb_check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if await is_channel_member(query.from_user.id, context):
-        await query.answer("✅ عضویت شما تایید شد! لطفاً /start را بزنید.", show_alert=True)
-    else:
-        await query.answer("❌ شما هنوز در کانال عضو نشده‌اید!", show_alert=True)
+    await msg.edit_text("✅ آگهی شما با موفقیت در کانال منتشر شد!")
+    return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۸. ثبت آگهی
+# ۸. ایجنت ساخت رزومه (مخصوص کارجو)
 # ══════════════════════════════════════════════════════════════════════════════
-async def cb_post_job(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    user_id = query.from_user.id
+async def role_seeker(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_text("📄 **نام و نام خانوادگی** خود را وارد کنید:", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو ❌", callback_data="cancel")]]))
+    return RES_NAME
 
-    if not await is_channel_member(user_id, context):
-        return await query.answer("⚠️ ابتدا در کانال عضو شوید!", show_alert=True)
+async def get_res_name(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['res_name'] = update.message.text
+    await update.message.reply_text("💡 **مهارت‌های** خود را بنویسید (مثلاً: پایتون، طراحی، مدیریت):")
+    return RES_SKILLS
 
-    user_data = get_user_data(user_id)
-    if user_data.get("is_banned"):
-        return await safe_edit_message(query, "⛔️ شما از طرف مدیریت مسدود شده‌اید.")
+async def get_res_skills(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['res_skills'] = update.message.text
+    await update.message.reply_text("🏢 **سوابق شغلی** خود را بنویسید:")
+    return RES_EXP
 
-    quota_used = get_user_weekly_quota(user_id)
-    max_free = db.data["settings"]["max_free_ads"]
+async def get_res_exp(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    context.user_data['res_exp'] = update.message.text
+    await update.message.reply_text("📞 راه **ارتباطی** (شماره یا آیدی):")
+    return RES_CONTACT
 
-    if quota_used >= max_free and user_data["credits"] <= 0:
-        return await safe_edit_message(
-            query,
-            f"❌ **شما به سقف {max_free} آگهی رایگان در هفته رسیده‌اید.**\n\n"
-            f"🌟 برای ثبت آگهی بیشتر، با مدیر تماس بگیرید:\n👤 `@{OWNER_USERNAME}`"
-        )
-
-    user_states[user_id] = {"step": "title", "data": {}}
-    await safe_edit_message(query, "📝 **مرحله ۱ از ۴: عنوان شغل**\nلطفاً عنوان شغل را وارد کنید:\n\n*(برای لغو /cancel را بزنید)*")
-
-async def wizard_router(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    user_id = update.effective_user.id
-    if user_id not in user_states: return False
-    if check_flood(user_id):
-        await update.message.reply_text("⚠️ لطفاً کمی آرام‌تر! (ضد اسپم)")
-        return True
-
-    text = update.message.text.strip()
-    if text == "/cancel":
-        del user_states[user_id]
-        await update.message.reply_text("❌ عملیات لغو شد.")
-        return True
-
-    state = user_states[user_id]
-    step, data = state["step"], state["data"]
-
-    if step == "title":
-        if len(text) < 3 or len(text) > 50:
-            return await update.message.reply_text("⚠️ عنوان باید بین ۳ تا ۵۰ کاراکتر باشد:") or True
-        data["title"] = text
-        state["step"] = "company"
-        await update.message.reply_text("🏢 **مرحله ۲ از ۴: نام شرکت**\nنام شرکت یا کارفرما را وارد کنید:")
-        return True
-
-    elif step == "company":
-        data["company"] = text
-        state["step"] = "desc"
-        await update.message.reply_text("📄 **مرحله ۳ از ۴: توضیحات شغل**\nشرایط و نیازمندی‌ها را بنویسید:")
-        return True
-
-    elif step == "desc":
-        if len(text) < 10:
-            return await update.message.reply_text("⚠️ توضیحات خیلی کوتاه است:") or True
-        data["desc"] = text
-        state["step"] = "contact"
-        await update.message.reply_text("📞 **مرحله ۴ از ۴: راه ارتباطی**\nشماره تماس یا آیدی تلگرام را وارد کنید:")
-        return True
-
-    elif step == "contact":
-        data["contact"] = text
-        del user_states[user_id]
-        
-        msg = await update.message.reply_text("⏳ **هوش مصنوعی در حال پردازش متن شماست...**")
-        ai_res = await ai_process_job(data["title"], data["desc"])
-        
-        job_id = f"job_{int(time.time())}_{user_id}"
-        is_premium = get_user_data(user_id)["credits"] > 0
-        
-        job_record = {
-            "owner_id": str(user_id),
-            "title": ai_res["title"],
-            "company": data["company"],
-            "category": ai_res["category"],
-            "desc": ai_res["desc"],
-            "contact": data["contact"],
-            "timestamp": time.time(),
-            "msg_id": 0,
-            "is_premium": is_premium,
-            "status": "pending"
-        }
-        
-        db.data["jobs"][job_id] = job_record
-        db.data["stats"]["total_jobs_posted"] += 1
-        if is_premium: get_user_data(user_id)["credits"] -= 1
-        await db.save()
-
-        if db.data["settings"]["auto_approve"]:
-            await publish_job(context, job_id)
-            await msg.edit_text("✅ آگهی ثبت و منتشر شد!")
-        else:
-            await msg.edit_text("✅ آگهی ثبت شد و پس از تایید مدیر منتشر می‌شود.")
-            kb = [
-                [InlineKeyboardButton("✅ تایید", callback_data=f"approve_{job_id}")],
-                [InlineKeyboardButton("❌ رد", callback_data=f"reject_{job_id}")]
-            ]
-            try:
-                await context.bot.send_message(
-                    OWNER_ID, 
-                    f"🔔 **آگهی جدید:**\n{job_record['title']} - {job_record['company']}",
-                    reply_markup=InlineKeyboardMarkup(kb)
-                )
-            except: pass
-        return True
-    return False
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ۹. انتشار در کانال
-# ══════════════════════════════════════════════════════════════════════════════
-async def publish_job(context: ContextTypes.DEFAULT_TYPE, job_id: str):
-    job = db.data["jobs"].get(job_id)
-    if not job: return
-    badge = "🌟 **آگهی ویژه** 🌟\n\n" if job.get("is_premium") else ""
-    text = (
-        f"{badge}💼 **فرصت شغلی جدید**\n"
-        f"➖➖➖➖➖➖➖➖➖➖\n"
-        f"🔹 **عنوان:** {job['title']}\n"
-        f"🏢 **شرکت:** {job['company']}\n"
-        f"🗂 **دسته:** {job['category']}\n\n"
-        f"📝 **شرح:**\n{job['desc']}\n\n"
-        f"📞 **تماس:** {job['contact']}"
-    )
-    try:
-        msg = await context.bot.send_message(MAIN_CHANNEL_ID, text, parse_mode=ParseMode.MARKDOWN)
-        job["msg_id"], job["status"] = msg.message_id, "published"
-        if job.get("is_premium"):
-            await context.bot.pin_chat_message(MAIN_CHANNEL_ID, msg.message_id, disable_notification=True)
-        await db.save()
-    except Exception as e:
-        logger.error(f"Publish Error: {e}")
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ۱۰. پنل مالک
-# ══════════════════════════════════════════════════════════════════════════════
-async def cb_admin_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    if query.from_user.id != OWNER_ID:
-        return await query.answer("⛔️ دسترسی غیرمجاز!", show_alert=True)
-
-    pending = sum(1 for j in db.data["jobs"].values() if j["status"] == "pending")
-    text = (
-        f"👑 **پنل مدیریت ارشد**\n"
-        f"➖➖➖➖➖➖➖➖➖➖\n"
-        f"👥 کاربران: {len(db.data['users'])}\n"
-        f"💼 کل آگهی‌ها: {len(db.data['jobs'])}\n"
-        f"⏳ در انتظار تایید: {pending}\n"
-    )
-    kb = [
-        [InlineKeyboardButton(f"📋 آگهی‌های در انتظار ({pending})", callback_data="admin_pending")],
-        [InlineKeyboardButton("⚙️ تنظیمات ربات", callback_data="admin_settings")],
-        [InlineKeyboardButton("🧹 پاکسازی دستی آگهی‌ها", callback_data="admin_purge")]
-    ]
-    await safe_edit_message(query, text, InlineKeyboardMarkup(kb))
-
-async def cb_admin_approve(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != OWNER_ID: return
-    action, job_id = query.data.split("_", 1)
+async def get_res_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    msg = await update.message.reply_text("⏳ **ایجنت هوش مصنوعی در حال نگارش رزومه شماست...**")
+    prompt = "You are an expert HR. Write a professional, attractive resume in Dari/Farsi based on these details. Make it sound impressive."
+    user_data = f"Name: {context.user_data['res_name']}\nSkills: {context.user_data['res_skills']}\nExp: {context.user_data['res_exp']}\nContact: {update.message.text}"
     
-    if job_id not in db.data["jobs"]:
-        return await query.answer("❌ یافت نشد.", show_alert=True)
-        
-    if action == "approve":
-        db.data["jobs"][job_id]["status"] = "approved"
-        await publish_job(context, job_id)
-        await query.message.edit_text("✅ تایید و منتشر شد.")
-    elif action == "reject":
-        del db.data["jobs"][job_id]
-        await db.save()
-        await query.message.edit_text("❌ رد و حذف شد.")
+    resume = await ai_request(prompt, user_data)
+    await msg.edit_text(f"✅ **رزومه حرفه‌ای شما آماده شد:**\n\n{resume}\n\n*(می‌توانید این متن را کپی کنید)*")
+    return ConversationHandler.END
 
-async def cb_admin_pending(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != OWNER_ID: return
-    await query.answer()
+# ══════════════════════════════════════════════════════════════════════════════
+# ۹. پنل مالک (مخفی از دیگران)
+# ══════════════════════════════════════════════════════════════════════════════
+async def owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    if q.from_user.id != OWNER_ID: return await q.answer("⛔️ غیرمجاز", show_alert=True)
     
-    pending_jobs = [(jid, j) for jid, j in db.data["jobs"].items() if j["status"] == "pending"]
-    if not pending_jobs:
-        return await safe_edit_message(query, "📭 هیچ آگهی در انتظاری وجود ندارد.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]))
-        
-    jid, job = pending_jobs[0]
-    text = (
-        f"⏳ **آگهی در انتظار:**\n\n"
-        f"🔹 {job['title']}\n"
-        f"🏢 {job['company']}\n"
-        f"📝 {job['desc'][:100]}...\n"
-        f"📞 {job['contact']}"
-    )
-    kb = [
-        [InlineKeyboardButton("✅ تایید", callback_data=f"approve_{jid}"), InlineKeyboardButton("❌ رد", callback_data=f"reject_{jid}")],
-        [InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]
-    ]
-    await safe_edit_message(query, text, InlineKeyboardMarkup(kb))
-
-async def cb_admin_purge(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    if query.from_user.id != OWNER_ID: return
-    await query.answer("در حال پاکسازی...")
-    await purge_expired_jobs(context.bot, force=True)
-    await safe_edit_message(query, "✅ پاکسازی انجام شد.", InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="admin_panel")]]))
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ۱۱. جستجوی آگهی‌ها
-# ══════════════════════════════════════════════════════════════════════════════
-async def cb_search_jobs(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    kb = [
-        [InlineKeyboardButton("💻 IT", callback_data="cat_IT"), InlineKeyboardButton("📈 فروش", callback_data="cat_Sales")],
-        [InlineKeyboardButton("⚙️ مهندسی", callback_data="cat_Engineering"), InlineKeyboardButton("🩺 پزشکی", callback_data="cat_Medical")],
-        [InlineKeyboardButton("📚 آموزش", callback_data="cat_Education"), InlineKeyboardButton("🏢 اداری", callback_data="cat_Admin")],
-        [InlineKeyboardButton("🤝 خدماتی", callback_data="cat_Services"), InlineKeyboardButton("📦 سایر", callback_data="cat_Other")],
-    ]
-    await safe_edit_message(query, "🔍 **دسته‌بندی مورد نظر را انتخاب کنید:**", InlineKeyboardMarkup(kb))
-
-async def cb_search_results(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    cat = query.data.replace("cat_", "")
-    results = [j for j in db.data["jobs"].values() if j["category"] == cat and j["status"] == "published"]
+    vip_users = sum(1 for u in db.data["users"].values() if u.get("vip"))
+    revenue = db.data["stats"].get("revenue", 0)
     
-    if not results:
-        return await safe_edit_message(query, f"📭 در دسته {cat} آگهی فعالی نیست.")
-        
-    text = f"📋 **آگهی‌های {cat}:**\n\n"
-    for idx, j in enumerate(results[:5], 1):
-        text += f"{idx}. {j['title']} - {j['company']}\n"
-    await safe_edit_message(query, text)
+    text = f"👑 **پنل درآمد و مدیریت**\n\n💰 درآمد ستاره: {revenue}\n👑 کاربران VIP: {vip_users}\n👥 کل کاربران: {len(db.data['users'])}"
+    await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back_start")]]))
+
+async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.message.delete()
+    await start(update, context)
+
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    await q.message.edit_text("❌ عملیات لغو شد. برای شروع مجدد /start را بزنید.")
+    return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۱۲. پاکسازی خودکار (بدون نیاز به JobQueue)
+# ۱۰. اجرای اصلی
 # ══════════════════════════════════════════════════════════════════════════════
-async def purge_expired_jobs(bot, force=False):
-    now = time.time()
-    expiry = db.data["settings"]["ad_expiry_days"] * 86400
-    to_delete = []
-
-    for jid, j in db.data["jobs"].items():
-        if force or (now - j["timestamp"]) >= expiry:
-            to_delete.append(jid)
-            if j.get("msg_id"):
-                try: await bot.delete_message(MAIN_CHANNEL_ID, j["msg_id"])
-                except: pass
-
-    for jid in to_delete:
-        del db.data["jobs"][jid]
-    if to_delete: await db.save()
-
-async def background_purger(bot):
-    """تایمر پس‌زمینه برای پاکسازی خودکار هر ۲۴ ساعت"""
-    await asyncio.sleep(60) # اجرای اول پس از ۱ دقیقه
-    while True:
-        try:
-            await purge_expired_jobs(bot)
-        except Exception as e:
-            logger.error(f"Auto Purge Error: {e}")
-        await asyncio.sleep(86400) # ۲۴ ساعت
-
-# ══════════════════════════════════════════════════════════════════════════════
-# ۱۳. راه‌اندازی نهایی
-# ══════════════════════════════════════════════════════════════════════════════
-async def post_init(app: Application):
-    asyncio.create_task(background_purger(app.bot))
-    logger.info("⏱️ تایمر پاکسازی خودکار فعال شد.")
-
 def main():
-    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).post_init(post_init).build()
+    app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
-    # هندلرهای اصلی
-    app.add_handler(CommandHandler("start", cmd_start))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_router))
-    app.add_handler(ChatMemberHandler(anti_abuse_handler, ChatMemberHandler.MY_CHAT_MEMBER))
+    # هندلر پرداخت
+    app.add_handler(PreCheckoutQueryHandler(pre_checkout))
+    app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # دکمه‌های شیشه‌ای کاربران
-    app.add_handler(CallbackQueryHandler(cb_check_join, pattern="^check_join$"))
-    app.add_handler(CallbackQueryHandler(cb_post_job, pattern="^post_job$"))
-    app.add_handler(CallbackQueryHandler(cb_search_jobs, pattern="^search_jobs$"))
-    app.add_handler(CallbackQueryHandler(cb_search_results, pattern="^cat_"))
-    
-    # دکمه‌های شیشه‌ای مالک
-    app.add_handler(CallbackQueryHandler(cb_admin_panel, pattern="^admin_panel$"))
-    app.add_handler(CallbackQueryHandler(cb_admin_pending, pattern="^admin_pending$"))
-    app.add_handler(CallbackQueryHandler(cb_admin_purge, pattern="^admin_purge$"))
-    app.add_handler(CallbackQueryHandler(cb_admin_approve, pattern="^(approve_|reject_)"))
+    # هندلرهای ثبت آگهی
+    job_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(role_employer, pattern="^role_employer$")],
+        states={
+            JOB_TITLE: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_title)],
+            JOB_COMPANY: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_company)],
+            JOB_DESC: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_desc)],
+            JOB_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_contact)],
+        },
+        fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
+    )
 
-    # 🛡️ مدیریت خطاهای سراسری (جلوگیری از کرش کردن ربات)
-    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
-        logger.error("خطای مدیریت نشده:", exc_info=context.error)
+    # هندلرهای ساخت رزومه
+    res_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(role_seeker, pattern="^role_seeker$")],
+        states={
+            RES_NAME: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_res_name)],
+            RES_SKILLS: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_res_skills)],
+            RES_EXP: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_res_exp)],
+            RES_CONTACT: [MessageHandler(filters.TEXT & ~filters.COMMAND, get_res_contact)],
+        },
+        fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
+    )
 
-    app.add_error_handler(error_handler)
-    
-    logger.info("🚀 ربات کاریابی افغان با موفقیت استارت شد!")
-    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, stop_signals=None)
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(job_conv)
+    app.add_handler(res_conv)
+    app.add_handler(CallbackQueryHandler(check_join, pattern="^check_join$"))
+    app.add_handler(CallbackQueryHandler(buy_vip, pattern="^buy_vip$"))
+    app.add_handler(CallbackQueryHandler(owner_panel, pattern="^owner_panel$"))
+    app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
+
+    logger.info("🚀 SaaS Platform Started!")
+    app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
     main()
