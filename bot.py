@@ -1,5 +1,5 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# 🏢 AFGHAN JOB FINDER - ULTIMATE ENTERPRISE EDITION (v5.1 Fixed)
+# 🏢 AFGHAN JOB FINDER - ULTIMATE ENTERPRISE EDITION (v5.2 Fixed)
 # ══════════════════════════════════════════════════════════════════════════════
 # 📌 توضیحات: سیستم‌عامل کاریابی هوشمند با دیتابیس ابری گیت‌هاب
 # 🛡️ امنیت: تمامی توکن‌ها از Secrets خوانده می‌شوند (بدون هاردکد)
@@ -27,7 +27,7 @@ from telegram.constants import ParseMode
 from telegram.error import TelegramError, BadRequest
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۱. تنظیمات و متغیرهای محیطی
+# ۱. تنظیمات و متغیرهای محیطی (خوانده شده از Secrets)
 # ══════════════════════════════════════════════════════════════════════════════
 logging.basicConfig(
     format="%(asctime)s | %(levelname)-8s | %(name)s | %(message)s",
@@ -108,6 +108,13 @@ class CloudDatabase:
                 logger.error(f"❌ خطا در ذخیره دیتابیس: {e}")
 
 db = CloudDatabase(GH_PAT, GH_REPO)
+
+# 🛡️ اطمینان از وجود کلیدهای اصلی در دیتابیس (حل قطعی خطای KeyError)
+if "users" not in db.data: db.data["users"] = {}
+if "jobs" not in db.data: db.data["jobs"] = {}
+if "settings" not in db.data: db.data["settings"] = {"auto_approve": False, "max_free_ads": 3, "ad_expiry_days": 7}
+if "stats" not in db.data: db.data["stats"] = {"total_jobs_posted": 0, "total_users": 0}
+
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ۳. متغیرهای سراسری
@@ -521,27 +528,35 @@ async def background_purger(bot):
 # ۱۳. راه‌اندازی نهایی
 # ══════════════════════════════════════════════════════════════════════════════
 async def post_init(app: Application):
-    # راه‌اندازی تایمر با asyncio (کاملاً مستقل از JobQueue)
     asyncio.create_task(background_purger(app.bot))
     logger.info("⏱️ تایمر پاکسازی خودکار فعال شد.")
 
 def main():
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).post_init(post_init).build()
 
+    # هندلرهای اصلی
     app.add_handler(CommandHandler("start", cmd_start))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, wizard_router))
     app.add_handler(ChatMemberHandler(anti_abuse_handler, ChatMemberHandler.MY_CHAT_MEMBER))
 
+    # دکمه‌های شیشه‌ای کاربران
     app.add_handler(CallbackQueryHandler(cb_check_join, pattern="^check_join$"))
     app.add_handler(CallbackQueryHandler(cb_post_job, pattern="^post_job$"))
     app.add_handler(CallbackQueryHandler(cb_search_jobs, pattern="^search_jobs$"))
     app.add_handler(CallbackQueryHandler(cb_search_results, pattern="^cat_"))
     
+    # دکمه‌های شیشه‌ای مالک
     app.add_handler(CallbackQueryHandler(cb_admin_panel, pattern="^admin_panel$"))
     app.add_handler(CallbackQueryHandler(cb_admin_pending, pattern="^admin_pending$"))
     app.add_handler(CallbackQueryHandler(cb_admin_purge, pattern="^admin_purge$"))
     app.add_handler(CallbackQueryHandler(cb_admin_approve, pattern="^(approve_|reject_)"))
 
+    # 🛡️ مدیریت خطاهای سراسری (جلوگیری از کرش کردن ربات)
+    async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+        logger.error("خطای مدیریت نشده:", exc_info=context.error)
+
+    app.add_error_handler(error_handler)
+    
     logger.info("🚀 ربات کاریابی افغان با موفقیت استارت شد!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, stop_signals=None)
 
