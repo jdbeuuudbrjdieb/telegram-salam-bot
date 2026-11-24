@@ -1,33 +1,28 @@
 import os
 import sys
 import json
-import random
-import hashlib
-import base64
 import logging
-import re
-import time
-import asyncio
 import requests
-from datetime import datetime, timedelta
-from functools import wraps
-from telegram import Update, ChatPermissions, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
-from telegram.ext import Application, MessageHandler, CommandHandler, CallbackQueryHandler, ContextTypes, filters
+import asyncio
+import base64
+from datetime import datetime
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, ContextTypes
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
 
-# =========================================================================================
-# ۱. تنظیمات اولیه و دیتابیس ابری گیت‌هاب
-# =========================================================================================
+# ═══════════════════════════════════════════════════════════════════════
+# ۱. تنظیمات و دیتابیس ابری گیت‌هاب
+# ═══════════════════════════════════════════════════════════════════════
 logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(message)s", level=logging.INFO)
-logger = logging.getLogger("Ultimate-OS-v6")
-START_TIME = time.time()
+logger = logging.getLogger("AgentOS-Autonomous")
 
 BOT_TOKEN = os.getenv("BOT_TOKEN", "")
 GH_PAT = os.getenv("GH_PAT", "")
-GH_REPO = os.getenv("GITHUB_REPOSITORY", "") # دریافت خودکار نام مخزن از گیت‌هاب
+GH_REPO = os.getenv("GITHUB_REPOSITORY", "")
+OWNER_ID = int(os.getenv("OWNER_ID", "0"))
 
-if not BOT_TOKEN: sys.exit("BOT_TOKEN missing")
+if not BOT_TOKEN:
+    sys.exit("BOT_TOKEN یافت نشد.")
 
 class GitHubDB:
     def __init__(self, token, repo):
@@ -54,296 +49,186 @@ class GitHubDB:
             try:
                 url = f"https://api.github.com/repos/{self.repo}/contents/db.json"
                 content = base64.b64encode(json.dumps(self.data, ensure_ascii=False, indent=2).encode()).decode()
-                payload = {"message": "Auto-update DB", "content": content}
+                payload = {"message": "Auto OS", "content": content}
                 if self.sha: payload["sha"] = self.sha
                 loop = asyncio.get_event_loop()
                 res = await loop.run_in_executor(None, lambda: requests.put(url, headers=self.headers, json=payload, timeout=10))
                 if res.status_code in (200, 201): self.sha = res.json()["content"]["sha"]
-            except Exception as e: logger.error(f"DB Save Error: {e}")
+            except Exception as e: logger.error(f"DB Save: {e}")
 
 db = GitHubDB(GH_PAT, GH_REPO)
+if "agents" not in db.data: db.data["agents"] = {}
+if "bots" not in db.data: db.data["bots"] = {}
 
-# =========================================================================================
-# ۲. توابع دیتابیس و تنظیمات پیش‌فرض
-# =========================================================================================
-def get_chat(chat_id):
-    cid = str(chat_id)
-    if "chats" not in db.data: db.data["chats"] = {}
-    if cid not in db.data["chats"]: db.data["chats"][cid] = {"config": {}, "users": {}, "notes": {}, "filters": {}}
-    return db.data["chats"][cid]
+user_states = {}
+active_bots = {}
 
-def get_user(chat_id, user_id):
-    uid = str(user_id)
-    cdata = get_chat(chat_id)
-    if uid not in cdata["users"]: cdata["users"][uid] = {"warns": 0, "msgs": 0, "xp": 0}
-    return cdata["users"][uid]
-
-def get_config(chat_id):
-    cdata = get_chat(chat_id)
-    if not cdata["config"]:
-        cdata["config"] = {
-            "lock_link": True, "lock_forward": True, "lock_media": False, "lock_sticker": False,
-            "lock_bot": False, "lock_english": False, "lock_emoji": False, "force_channel": False,
-            "welcome": True, "antiflood": True, "antiedit": True
-        }
-    return cdata["config"]
-
-# =========================================================================================
-# ۳. توابع کمکی
-# =========================================================================================
-async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int = None) -> bool:
-    if not update.effective_chat or update.effective_chat.type not in ("group", "supergroup"): return False
+# ═══════════════════════════════════════════════════════════════════════
+# ۲. موتور هوش مصنوعی بدون کلید (Keyless AI)
+# ═══════════════════════════════════════════════════════════════════════
+async def ask_ai(system_prompt: str, user_msg: str) -> str:
+    """اتصال به سرور رایگان و بدون کلید Pollinations (با پشتیبانی از System Prompt)"""
+    url = "https://text.pollinations.ai/openai"
+    payload = {
+        "model": "openai", # استفاده از بهترین مدل موجود در سرور
+        "messages": [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": user_msg}
+        ]
+    }
     try:
-        m = await context.bot.get_chat_member(update.effective_chat.id, user_id or update.effective_user.id)
-        return m.status in ("administrator", "creator")
-    except: return False
+        loop = asyncio.get_event_loop()
+        res = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, timeout=30))
+        if res.status_code == 200:
+            return res.json()["choices"][0]["message"]["content"]
+        return f"⚠️ سرور شلوغ است. لطفاً چند لحظه بعد دوباره تلاش کنید. (کد {res.status_code})"
+    except Exception as e:
+        logger.error(f"AI Error: {e}")
+        return "❌ خطا در ارتباط با سرور هوش مصنوعی."
 
-def admin_only(func):
-    @wraps(func)
-    async def wrapper(update: Update, context: ContextTypes.DEFAULT_TYPE, *a, **kw):
-        if not await is_admin(update, context): return
-        return await func(update, context, *a, **kw)
-    return wrapper
+# ═══════════════════════════════════════════════════════════════════════
+# ۳. دستورات ربات مادر
+# ═══════════════════════════════════════════════════════════════════════
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    text = (
+        "🤖 **به سیستم‌عامل خودمختار (Autonomous Agent OS) خوش آمدید**\n\n"
+        "من یک مادرِ تمام‌عیار هستم. بدون نیاز به هیچ تنظیمات پیچیده‌ای، برای شما ایجنت می‌سازم و ربات‌های فرزند را روشن می‌کنم.\n\n"
+        "🧠 **ایجنت‌ها:**\n"
+        "`/newagent` - ساخت شخصیت جدید\n"
+        "`/myagents` - لیست ایجنت‌ها\n"
+        "`/ask <نام> <سوال>` - صحبت با ایجنت\n\n"
+        "🤖 **ساخت ربات زیرمجموعه:**\n"
+        "`/newbot` - روشن کردن ربات تلگرام جدید با هوش مصنوعی\n"
+    )
+    await update.message.reply_text(text, parse_mode=ParseMode.MARKDOWN)
 
-async def auto_del(msg, sec=5):
-    if not msg: return
-    async def _del():
-        await asyncio.sleep(sec)
-        try: await msg.delete()
-        except: pass
-    asyncio.create_task(_del())
+async def new_agent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_states[update.effective_user.id] = {"step": "agent_name"}
+    await update.message.reply_text("📝 **مرحله ۱ از ۲:**\nیک نام انگلیسی برای ایجنت خود انتخاب کنید (مثلاً `SalesBot`):")
 
-def parse_time(t):
-    if not t: return 0
-    m = re.match(r"^(\d+)(s|m|h|d)?$", t.lower())
-    if not m: return 0
-    n, u = int(m.group(1)), m.group(2) or "m"
-    return n * {"s":1, "m":60, "h":3600, "d":86400}[u]
+async def list_agents(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    my_agents = [name for name, data in db.data["agents"].items() if data["owner"] == user_id]
+    if not my_agents: return await update.message.reply_text("📭 شما هنوز ایجنتی نساخته‌اید.")
+    await update.message.reply_text("🧠 **ایجنت‌های شما:**\n\n" + "\n".join([f"🔹 `{a}`" for a in my_agents]), parse_mode=ParseMode.MARKDOWN)
 
-# =========================================================================================
-# ۴. پنل مدیریت چندصفحه‌ای
-# =========================================================================================
-@admin_only
-async def live_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton("🔐 مدیریت قفل‌ها", callback_data="menu_locks")],
-        [InlineKeyboardButton("⚙️ تنظیمات ربات", callback_data="menu_features")],
-        [InlineKeyboardButton("📊 آمار و اطلاعات", callback_data="menu_stats")]
-    ]
-    await update.message.reply_text("⚙️ **پنل مدیریت Enterprise**", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode=ParseMode.MARKDOWN)
-
-async def panel_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    if not await is_admin(update, context): return
+async def ask_agent(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if len(context.args) < 2: return await update.message.reply_text("⚠️ `/ask Name سوال شما`")
+    agent_name, question = context.args[0], " ".join(context.args[1:])
+    if agent_name not in db.data["agents"]: return await update.message.reply_text("❌ ایجنت پیدا نشد.")
     
-    chat_id = q.message.chat.id
-    cfg = get_config(chat_id)
-    action = q.data
+    msg = await update.message.reply_text("⏳ در حال پردازش...")
+    answer = await ask_ai(db.data["agents"][agent_name]["prompt"], question)
+    await msg.edit_text(f"🤖 **{agent_name}:**\n\n{answer}", parse_mode=ParseMode.MARKDOWN)
 
-    if action == "menu_locks":
-        kb = [
-            [InlineKeyboardButton(f"🔗 لینک: {'🟢' if cfg['lock_link'] else '🔴'}", callback_data="toggle_lock_link"),
-             InlineKeyboardButton(f"📨 فوروارد: {'🟢' if cfg['lock_forward'] else '🔴'}", callback_data="toggle_lock_forward")],
-            [InlineKeyboardButton(f"🖼 رسانه: {'🟢' if cfg['lock_media'] else '🔴'}", callback_data="toggle_lock_media"),
-             InlineKeyboardButton(f"🎭 استیکر: {'🟢' if cfg['lock_sticker'] else '🔴'}", callback_data="toggle_lock_sticker")],
-            [InlineKeyboardButton(f"🤖 ربات: {'🟢' if cfg['lock_bot'] else '🔴'}", callback_data="toggle_lock_bot"),
-             InlineKeyboardButton(f"🔤 انگلیسی: {'🟢' if cfg['lock_english'] else '🔴'}", callback_data="toggle_lock_english")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="menu_main")]
-        ]
-        await q.message.edit_text("🔐 **مدیریت قفل‌ها:**", reply_markup=InlineKeyboardMarkup(kb))
-    elif action == "menu_features":
-        kb = [
-            [InlineKeyboardButton(f"📢 کانال اجباری: {'🟢' if cfg['force_channel'] else '🔴'}", callback_data="toggle_force_channel"),
-             InlineKeyboardButton(f"👋 خوش‌آمد: {'🟢' if cfg['welcome'] else '🔴'}", callback_data="toggle_welcome")],
-            [InlineKeyboardButton(f"🌊 ضد اسپم: {'🟢' if cfg['antiflood'] else '🔴'}", callback_data="toggle_antiflood"),
-             InlineKeyboardButton(f"📝 ضد ادیت: {'🟢' if cfg['antiedit'] else '🔴'}", callback_data="toggle_antiedit")],
-            [InlineKeyboardButton("🔙 بازگشت", callback_data="menu_main")]
-        ]
-        await q.message.edit_text("⚙️ **تنظیمات ربات:**", reply_markup=InlineKeyboardMarkup(kb))
-    elif action == "menu_stats":
-        cdata = get_chat(chat_id)
-        await q.message.edit_text(f"📊 **آمار گروه:**\n\n👥 کاربران: {len(cdata['users'])}\n💬 کل پیام‌ها: {sum(u.get('msgs',0) for u in cdata['users'].values())}")
-    elif action.startswith("toggle_"):
-        key = action.replace("toggle_", "")
-        if key in cfg:
-            cfg[key] = not cfg[key]
-            await db.save()
-        await panel_callback(update, context) # رفرش
-    elif action == "menu_main":
-        await live_panel(q.message, context) # Hacky way to refresh main menu
+async def new_bot(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_states[update.effective_user.id] = {"step": "bot_token"}
+    await update.message.reply_text("🤖 **مرحله ۱ از ۲ (ساخت ربات):**\nتوکن ربات جدید خود را از `@BotFather` بگیرید و اینجا بفرستید:")
 
-# =========================================================================================
-# ۵. دستورات فارسی (GroupHelp Style)
-# =========================================================================================
-@admin_only
-async def persian_cmds(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not msg.text or update.effective_chat.type not in ("group", "supergroup"): return
-    
-    text = msg.text.strip().split()
-    cmd = text[0]
-    chat_id = update.effective_chat.id
-
-    if cmd == "پاکسازی":
-        if not msg.reply_to_message: return await auto_del(await msg.reply_text("⚠️ روی پیام ریپلای کنید."))
-        count = 0
-        for i in range(msg.message_id, msg.reply_to_message.message_id - 1, -1):
-            try: await context.bot.delete_message(chat_id, i); count += 1
-            except: pass
-        return await auto_del(await msg.reply_text(f"🧹 {count} پیام پاک شد."))
-
-    if cmd not in ["بن", "سکوت", "آزاد", "اخطار", "پین", "حذف"]: return
-    if not msg.reply_to_message: return await auto_del(await msg.reply_text("⚠️ روی پیام کاربر ریپلای کنید."))
-
-    target = msg.reply_to_message.from_user
-    udata = get_user(chat_id, target.id)
-
-    if cmd == "بن":
-        await context.bot.ban_chat_member(chat_id, target.id)
-        await auto_del(await msg.reply_text(f"⛔️ {target.first_name} بن شد."))
-    elif cmd == "سکوت":
-        await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=False))
-        await auto_del(await msg.reply_text(f"🔇 {target.first_name} سکوت شد."))
-    elif cmd == "آزاد":
-        await context.bot.restrict_chat_member(chat_id, target.id, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True))
-        await auto_del(await msg.reply_text(f"🔊 {target.first_name} آزاد شد."))
-    elif cmd == "اخطار":
-        udata["warns"] += 1
-        await db.save()
-        if udata["warns"] >= 3:
-            await context.bot.ban_chat_member(chat_id, target.id)
-            udata["warns"] = 0
-            await db.save()
-            await auto_del(await msg.reply_text(f"⛔️ {target.first_name} با ۳ اخطار بن شد."))
-        else:
-            await auto_del(await msg.reply_text(f"⚠️ {target.first_name} اخطار گرفت ({udata['warns']}/3)."))
-    elif cmd == "پین":
-        await context.bot.pin_chat_message(chat_id, msg.reply_to_message.message_id)
-        await auto_del(await msg.reply_text("📌 پین شد."))
-    elif cmd == "حذف":
-        await msg.reply_to_message.delete()
-        await auto_del(await msg.reply_text("🗑 حذف شد."))
-
-# =========================================================================================
-# ۶. مدیریت خودکار، خوش‌آمدگویی و کانال اجباری
-# =========================================================================================
-async def welcome_member(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    cfg = get_config(chat_id)
-    for m in update.message.new_chat_members:
-        if m.is_bot: continue
+# ═══════════════════════════════════════════════════════════════════════
+# ۴. کارخانه ساخت ربات فرزند (Sub-Bot Factory)
+# ═══════════════════════════════════════════════════════════════════════
+async def run_child_bot(token, agent_name, owner_id):
+    try:
+        app = Application.builder().token(token).build()
         
-        kb = []
-        if cfg["force_channel"]:
-            kb.append([InlineKeyboardButton("📢 عضویت در کانال", url="https://t.me/Your_Channel")])
-            kb.append([InlineKeyboardButton("✅ تایید", callback_data=f"verify_{m.id}")])
-            await context.bot.restrict_chat_member(chat_id, m.id, permissions=ChatPermissions(can_send_messages=False))
-            
-        txt = f"👋 سلام {m.mention_html()} عزیز\nبه گروه AA+ خوش آمدید."
-        if cfg["force_channel"]: txt += "\n\n⚠️ برای ارسال پیام در کانال عضو شوید."
-        sent = await update.message.reply_text(txt, reply_markup=InlineKeyboardMarkup(kb) if kb else None, parse_mode=ParseMode.HTML)
-        await auto_del(sent, 60)
+        async def child_handler(upd: Update, ctx: ContextTypes.DEFAULT_TYPE):
+            if not upd.effective_message or not upd.effective_message.text: return
+            user_text = upd.effective_message.text
+            prompt = db.data["agents"].get(agent_name, {}).get("prompt", "تو یک دستیار مودب هستی.")
+            reply = await ask_ai(prompt, user_text)
+            await upd.effective_message.reply_text(reply)
 
-async def verify_cb(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    await q.answer()
-    uid = int(q.data.split("_")[1])
-    if q.from_user.id != uid: return
-    await context.bot.restrict_chat_member(q.message.chat.id, uid, permissions=ChatPermissions(can_send_messages=True, can_send_media_messages=True, can_send_other_messages=True))
-    await q.message.edit_text(f"✅ تایید شد! خوش آمدید {q.from_user.first_name}.")
+        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, child_handler))
+        
+        await app.initialize()
+        await app.updater.start_polling(drop_pending_updates=True)
+        await app.start()
+        
+        active_bots[owner_id] = app
+        logger.info(f"Sub-bot for {agent_name} started successfully.")
+    except Exception as e:
+        logger.error(f"Failed to start sub-bot: {e}")
 
-async def auto_moderator(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = update.effective_message
-    if not msg or update.effective_chat.type not in ("group", "supergroup"): return
-    if msg.from_user.is_bot or await is_admin(update, context): return
+# ═══════════════════════════════════════════════════════════════════════
+# ۵. روتر وضعیت (Wizard Router)
+# ═══════════════════════════════════════════════════════════════════════
+async def handle_states(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_id = update.effective_user.id
+    if user_id not in user_states: return False
 
-    chat_id = update.effective_chat.id
-    cfg = get_config(chat_id)
-    udata = get_user(chat_id, msg.from_user.id)
-    text = msg.text or msg.caption or ""
+    state = user_states[user_id]
+    text = update.message.text.strip()
 
-    # آمار و XP
-    udata["msgs"] += 1
-    udata["xp"] += 5
-    if udata["msgs"] % 20 == 0: await db.save() # ذخیره هر ۲۰ پیام برای جلوگیری از بلاک شدن API
+    if state["step"] == "agent_name":
+        if text in db.data["agents"]:
+            await update.message.reply_text("⚠️ این نام تکراری است. نام دیگری بفرستید:")
+            return True
+        state["name"] = text
+        state["step"] = "agent_prompt"
+        await update.message.reply_text("🧠 **مرحله ۲ از ۲:**\nدستورات (System Prompt) خود را بفرستید.\nمثال: `تو یک مشاور فروش هستی.`")
+        return True
 
-    # قفل‌ها
-    if cfg["lock_media"] and (msg.photo or msg.video): return await msg.delete()
-    if cfg["lock_sticker"] and msg.sticker: return await msg.delete()
-    if cfg["lock_bot"] and msg.via_bot: return await msg.delete()
-    if cfg["lock_forward"] and msg.forward_origin: return await msg.delete()
-    if cfg["lock_link"] and re.search(r"(https?://|t\.me/|@[a-zA-Z0-9_]+)", text): return await msg.delete()
-    if cfg["lock_english"] and re.search(r"[a-zA-Z]{4,}", text): return await msg.delete()
-    
-    # فیلترهای پاسخ خودکار
-    filters_dict = get_chat(chat_id)["filters"]
-    for k, v in filters_dict.items():
-        if k in text.lower(): return await msg.reply_text(v)
+    elif state["step"] == "agent_prompt":
+        name, prompt = state["name"], text
+        db.data["agents"][name] = {"owner": user_id, "prompt": prompt, "created": str(datetime.now())}
+        await db.save()
+        del user_states[user_id]
+        await update.message.reply_text(f"✅ ایجنت `{name}` ساخته شد!\nتست: `/ask {name} سلام`", parse_mode=ParseMode.MARKDOWN)
+        return True
 
-# =========================================================================================
-# ۷. ابزارها (فونت، یادداشت، فیلتر، سرگرمی)
-# =========================================================================================
-async def font_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return await update.message.reply_text("⚠️ `/font hello`")
-    t = " ".join(context.args)
-    b = "".join([chr(ord(c)+119743) if 'a'<=c<='z' else chr(ord(c)+119737) if 'A'<=c<='Z' else c for c in t])
-    i = "".join([chr(ord(c)+119795) if 'a'<=c<='z' else c for c in t])
-    await update.message.reply_text(f"عادی: {t}\nبولد: {b}\nایتالیک: {i}")
+    elif state["step"] == "bot_token":
+        if ":" not in text:
+            await update.message.reply_text("❌ توکن نامعتبر است.")
+            return True
+        state["token"] = text
+        state["step"] = "bot_agent"
+        await update.message.reply_text("🧠 **مرحله ۲ از ۲:**\nنام ایجنتی که می‌خواهید این ربات از آن استفاده کند را بفرستید:")
+        return True
 
-@admin_only
-async def save_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2: return await update.message.reply_text("⚠️ `/save name متن`")
-    name, text = context.args[0], " ".join(context.args[1:])
-    get_chat(update.effective_chat.id)["notes"][name] = text
-    await db.save()
-    await update.message.reply_text(f"✅ `{name}` ذخیره شد.")
+    elif state["step"] == "bot_agent":
+        agent_name = text
+        if agent_name not in db.data["agents"]:
+            await update.message.reply_text("❌ این ایجنت وجود ندارد. اول با `/newagent` بسازید:")
+            return True
+        
+        msg = await update.message.reply_text("⏳ در حال روشن کردن ربات فرزند...")
+        token = state["token"]
+        
+        asyncio.create_task(run_child_bot(token, agent_name, user_id))
+        
+        user_id_str = str(user_id)
+        if user_id_str not in db.data["bots"]: db.data["bots"][user_id_str] = []
+        db.data["bots"][user_id_str].append({"token": token, "agent": agent_name})
+        await db.save()
+        
+        del user_states[user_id]
+        await msg.edit_text(f"✅ ربات با موفقیت با شخصیت `{agent_name}` روشن شد!\nحالا به ربات خود پیام دهید.")
+        return True
+    return False
 
-async def get_note(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if not context.args: return
-    note = get_chat(update.effective_chat.id)["notes"].get(context.args[0])
-    if note: await update.message.reply_text(note)
-    else: await update.message.reply_text("❌ پیدا نشد.")
-
-@admin_only
-async def add_filter(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    if len(context.args) < 2: return
-    k, v = context.args[0].lower(), " ".join(context.args[1:])
-    get_chat(update.effective_chat.id)["filters"][k] = v
-    await db.save()
-    await update.message.reply_text(f"✅ فیلتر `{k}` ساخته شد.")
-
-async def dice_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    await update.message.reply_text(f"🎲 نتیجه: **{random.randint(1,6)}**", parse_mode=ParseMode.MARKDOWN)
-
-# =========================================================================================
-# ۸. راه‌اندازی
-# =========================================================================================
+# ═══════════════════════════════════════════════════════════════════════
+# ۶. استارت آپ
+# ═══════════════════════════════════════════════════════════════════════
 async def post_init(app: Application):
-    await app.bot.set_my_commands([
-        BotCommand("panel", "پنل مدیریت"), BotCommand("font", "فونت ساز"),
-        BotCommand("save", "ذخیره یادداشت"), BotCommand("get", "دریافت یادداشت"),
-        BotCommand("filter", "ساخت فیلتر"), BotCommand("dice", "تاس")
-    ])
+    logger.info("Restarting previous child bots...")
+    for owner_id_str, bots in db.data.get("bots", {}).items():
+        for b in bots:
+            asyncio.create_task(run_child_bot(b["token"], b["agent"], int(owner_id_str)))
+            await asyncio.sleep(1)
 
 def main():
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).post_init(post_init).build()
 
-    app.add_handler(CallbackQueryHandler(verify_cb, pattern="^verify_"))
-    app.add_handler(CallbackQueryHandler(panel_callback, pattern="^(menu_|toggle_)"))
+    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("newagent", new_agent))
+    app.add_handler(CommandHandler("myagents", list_agents))
+    app.add_handler(CommandHandler("ask", ask_agent))
+    app.add_handler(CommandHandler("newbot", new_bot))
     
-    app.add_handler(CommandHandler("panel", live_panel))
-    app.add_handler(CommandHandler("font", font_cmd))
-    app.add_handler(CommandHandler("save", save_note))
-    app.add_handler(CommandHandler("get", get_note))
-    app.add_handler(CommandHandler("filter", add_filter))
-    app.add_handler(CommandHandler("dice", dice_cmd))
-    
-    app.add_handler(MessageHandler(filters.StatusUpdate.NEW_CHAT_MEMBERS, welcome_member))
-    app.add_handler(MessageHandler(filters.TEXT & filters.REPLY & ~filters.COMMAND, persian_cmds))
-    app.add_handler(MessageHandler((filters.TEXT | filters.PHOTO | filters.VIDEO | filters.Sticker.ALL) & ~filters.COMMAND, auto_moderator))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_states))
 
-    logger.info("🚀 Ultimate OS v6.0 Started!")
+    logger.info("🚀 Autonomous Agent OS v3.0 Started!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True, stop_signals=None)
 
 if __name__ == "__main__":
