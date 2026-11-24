@@ -1,4 +1,4 @@
-name: Run Telegram Salam Bot
+name: Run Telegram Job Finder Bot
 
 on:
   push:
@@ -8,7 +8,7 @@ on:
     - cron: "0 */6 * * *"
 
 concurrency:
-  group: salam-bot
+  group: job-finder-bot
   cancel-in-progress: false
 
 jobs:
@@ -29,10 +29,17 @@ jobs:
 
       - name: Run bot for ~5h25m
         env:
+          # در اینجا همه متغیرها را به پایتون می‌دهیم
           BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
+          GH_PAT: ${{ secrets.GH_PAT }}
+          OWNER_ID: ${{ secrets.OWNER_ID }}
+          MAIN_CHANNEL_ID: ${{ secrets.MAIN_CHANNEL_ID }}
+          MAIN_CHANNEL_LINK: ${{ secrets.MAIN_CHANNEL_LINK }}
+          GITHUB_REPOSITORY: ${{ github.repository }}
         run: |
-          echo "Starting bot..."
-          timeout 19500 python bot.py || echo "Time limit reached, chaining..."
+          echo "Starting Job Finder Bot..."
+          # دستور timeout را کمی تغییر دادیم تا اگر خطایی رخ داد، در لاگ‌ها قرمز شود
+          timeout 19500 python bot.py || echo "Bot stopped before time limit"
 
       - name: Trigger next run (self-redispatch)
         if: always()
