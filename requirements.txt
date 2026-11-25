@@ -1,2 +1,2 @@
-python-telegram-bot[job-queue]==21.6
+telethon==1.36.0
 requests==2.32.3
