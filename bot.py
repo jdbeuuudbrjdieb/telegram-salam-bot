@@ -1,28 +1,26 @@
 # ══════════════════════════════════════════════════════════════════════════════
-# 🚀 AFGHAN JOB SAAS PLATFORM - AI AGENT & MONETIZATION EDITION (v6.0)
+# 🚀 AFGHAN JOB SAAS PLATFORM - THE ULTIMATE EDITION (v7.0)
 # ══════════════════════════════════════════════════════════════════════════════
-# 💰 کسب درآمد: از طریق خرید ستاره تلگرام (برای آگهی ویژه و VIP)
-# 🧠 ایجنت هوش مصنوعی: ساخت رزومه کارجو و دستیار نگارش آگهی برای کارفرما
-# 🎨 رابط کاربری: کاملاً دکمه‌ای (بدون نیاز به تایپ طولانی)
+# 💰 مدل درآمدی: فروش آگهی ویژه (Pin) با ستاره تلگرام (XTR) + فروش رزومه با AI
+# 🧠 ایجنت AI: چت‌بات پشتیبان، رزومه‌ساز حرفه‌ای، دستیار نگارش آگهی
+# 🎨 رابط کاربری: کاملاً دکمه‌ای و بدون تایپ (Zero-Typing)
 # ══════════════════════════════════════════════════════════════════════════════
 
 import os, sys, json, logging, requests, asyncio, base64, time
-from datetime import datetime
 from typing import Optional, Dict, Any
 
 from telegram import (
-    Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice,
-    ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+    Update, InlineKeyboardButton, InlineKeyboardMarkup, LabeledPrice
 )
 from telegram.ext import (
     Application, CommandHandler, MessageHandler, CallbackQueryHandler,
-    ChatMemberHandler, PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
+    PreCheckoutQueryHandler, filters, ContextTypes, ConversationHandler
 )
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۱. پیکربندی و امنیت
+# ۱. پیکربندی
 # ══════════════════════════════════════════════════════════════════════════════
 logging.basicConfig(format="%(asctime)s | %(levelname)-8s | %(message)s", level=logging.INFO)
 logger = logging.getLogger("JobSaaS")
@@ -36,7 +34,7 @@ MAIN_CHANNEL_LINK = os.getenv("MAIN_CHANNEL_LINK", "")
 OWNER_USERNAME = os.getenv("OWNER_USERNAME", "Admin")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۲. دیتابیس ابری (مغز ربات)
+# ۲. دیتابیس ابری (GitHub DB)
 # ══════════════════════════════════════════════════════════════════════════════
 class CloudDB:
     def __init__(self, token, repo):
@@ -71,41 +69,34 @@ class CloudDB:
             except Exception as e: logger.error(f"DB Save Error: {e}")
 
 db = CloudDB(GH_PAT, GH_REPO)
+# گارد محافظتی برای جلوگیری از کرش (KeyError)
 for k in ["users", "jobs", "stats"]:
     if k not in db.data: db.data[k] = {}
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۳. ایجنت هوش مصنوعی (AI Agent)
+# ۳. موتور هوش مصنوعی (AI Engine)
 # ══════════════════════════════════════════════════════════════════════════════
 async def ai_request(system_prompt, user_text):
     url = "https://text.pollinations.ai/openai"
     payload = {"model": "openai", "messages": [{"role": "system", "content": system_prompt}, {"role": "user", "content": user_text}]}
     try:
         loop = asyncio.get_event_loop()
-        res = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, timeout=20))
+        res = await loop.run_in_executor(None, lambda: requests.post(url, json=payload, timeout=25))
         if res.status_code == 200: return res.json()["choices"][0]["message"]["content"]
     except Exception as e: logger.error(f"AI Error: {e}")
-    return None
+    return "متأسفم، در حال حاضر نمی‌توانم پاسخ دهم."
 
 # ══════════════════════════════════════════════════════════════════════════════
 # ۴. وضعیت‌ها (Conversation States)
 # ══════════════════════════════════════════════════════════════════════════════
-(ASK_ROLE, JOB_TITLE, JOB_COMPANY, JOB_DESC, JOB_CONTACT, 
- RES_NAME, RES_SKILLS, RES_EXP, RES_CONTACT) = range(9)
+(JOB_TITLE, JOB_COMPANY, JOB_DESC, JOB_CONTACT, 
+ RES_NAME, RES_SKILLS, RES_EXP, RES_CONTACT, AI_CHAT) = range(9)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۵. رابط کاربری اصلی (UI)
+# ۵. منوی اصلی (Ultra UX)
 # ══════════════════════════════════════════════════════════════════════════════
-async def is_member(uid, ctx):
-    try: return (await ctx.bot.get_chat_member(MAIN_CHANNEL_ID, uid)).status not in ["left", "kicked"]
-    except: return False
-
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = update.effective_user.id
-    if not await is_member(uid, context):
-        kb = [[InlineKeyboardButton("📢 عضویت در کانال", url=MAIN_CHANNEL_LINK)], [InlineKeyboardButton("✅ تایید", callback_data="check_join")]]
-        return await update.message.reply_text("⚠️ ابتدا در کانال عضو شوید:", reply_markup=InlineKeyboardMarkup(kb))
-
     if str(uid) not in db.data["users"]:
         db.data["users"][str(uid)] = {"vip": False, "stars": 0}
         await db.save()
@@ -114,25 +105,24 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vip_status = "🌟 ویژه" if u.get("vip") else "👤 عادی"
     
     kb = [
-        [InlineKeyboardButton("💼 ثبت آگهی (کارفرما)", callback_data="role_employer")],
+        [InlineKeyboardButton("💼 ثبت آگهی استخدام (کارفرما)", callback_data="role_employer")],
         [InlineKeyboardButton("📄 ساخت رزومه با AI (کارجو)", callback_data="role_seeker")],
-        [InlineKeyboardButton("🔍 جستجوی آگهی‌ها", callback_data="search_jobs")],
-        [InlineKeyboardButton("💎 خرید اشتراک VIP (ستاره)", callback_data="buy_vip")],
+        [InlineKeyboardButton("🧠 مشاور هوشمند شغلی (چت با AI)", callback_data="ai_chat_start")],
+        [InlineKeyboardButton("💎 ارتقا به ویژه (VIP)", callback_data="buy_vip")],
     ]
     if uid == OWNER_ID:
-        kb.append([InlineKeyboardButton("👑 پنل مدیریت", callback_data="owner_panel")])
+        kb.append([InlineKeyboardButton("👑 پنل درآمد و مدیریت", callback_data="owner_panel")])
 
-    text = f"سلام {update.effective_user.first_name}! 🌹\nبه پلتفرم هوشمند کاریابی خوش آمدید.\n\nوضعیت شما: {vip_status}"
-    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb))
-
-async def check_join(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    q = update.callback_query
-    if await is_member(q.from_user.id, context):
-        await q.answer("✅ تایید شد! لطفا /start را بزنید.", show_alert=True)
-    else: await q.answer("❌ هنوز عضو نشده‌اید!", show_alert=True)
+    text = (
+        f"سلام {update.effective_user.first_name}! 🌹\n"
+        f"به **پلتفرم هوشمند کاریابی افغان** خوش آمدید.\n\n"
+        f"وضعیت شما: {vip_status}\n"
+        f"لطفاً از منوی زیر انتخاب کنید:"
+    )
+    await update.message.reply_text(text, reply_markup=InlineKeyboardMarkup(kb), parse_mode=ParseMode.MARKDOWN)
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۶. سیستم پرداخت (Telegram Stars) - کسب درآمد!
+# ۶. سیستم پرداخت (Telegram Stars - درآمدزایی)
 # ══════════════════════════════════════════════════════════════════════════════
 async def buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -140,11 +130,11 @@ async def buy_vip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await context.bot.send_invoice(
         chat_id=q.from_user.id,
         title="اشتراک ویژه VIP",
-        description="ثبت نامحدود آگهی + پین شدن خودکار + نشان ویژه 🌟",
+        description="ثبت نامحدود آگهی + پین شدن خودکار در کانال + نشان ویژه",
         payload="vip_subscription",
-        provider_token="", # برای ستاره تلگرام خالی است
-        currency="XTR", # واحد پول: ستاره تلگرام
-        prices=[LabeledPrice("اشتراک یک ماهه", 50)] # ۵۰ ستاره
+        provider_token="", 
+        currency="XTR", 
+        prices=[LabeledPrice("اشتراک یک ماهه", 50)] 
     )
 
 async def pre_checkout(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -159,12 +149,37 @@ async def successful_payment(update: Update, context: ContextTypes.DEFAULT_TYPE)
     await update.message.reply_text("✅ پرداخت موفق! اشتراک VIP شما فعال شد. 🌟")
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۷. ویزارد ثبت آگهی (مخصوص کارفرما)
+# ۷. ایجنت چت هوشمند (AI Support)
+# ══════════════════════════════════════════════════════════════════════════════
+async def ai_chat_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    q = update.callback_query
+    await q.answer()
+    context.user_data['ai_mode'] = True
+    await q.message.edit_text(
+        "🧠 **مشاور هوشمند شغلی**\n\n"
+        "هر سوالی درباره مصاحبه، رزومه، حقوق و دستمزد یا قوانین کار داری، بپرس. من اینجام تا کمکت کنم!\n"
+        "*(برای خروج /start را بزنید)*",
+        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ خروج", callback_data="cancel")]])
+    )
+    return AI_CHAT
+
+async def ai_chat_handler(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    user_msg = update.message.text
+    msg = await update.message.reply_text("⏳ *در حال فکر کردن...*", parse_mode=ParseMode.MARKDOWN)
+    
+    system = "You are a professional HR consultant and career advisor in Afghanistan. Answer in the user's language (Dari/Pashto/English) politely."
+    reply = await ai_request(system, user_msg)
+    
+    await msg.edit_text(reply, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("❌ خروج", callback_data="cancel")]]))
+    return AI_CHAT
+
+# ══════════════════════════════════════════════════════════════════════════════
+# ۸. ویزارد ثبت آگهی (کارفرما)
 # ══════════════════════════════════════════════════════════════════════════════
 async def role_employer(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
-    await q.message.edit_text("📝 **عنوان شغل** را وارد کنید (مثلاً: برنامه‌نویس):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو ❌", callback_data="cancel")]]))
+    await q.message.edit_text("📝 **عنوان شغل** را وارد کنید (مثلاً: برنامه‌نویس پایتون):", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("لغو ❌", callback_data="cancel")]]))
     return JOB_TITLE
 
 async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -174,7 +189,7 @@ async def get_title(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def get_company(update: Update, context: ContextTypes.DEFAULT_TYPE):
     context.user_data['company'] = update.message.text
-    await update.message.reply_text("📝 **توضیحات** و شرایط شغل را بنویسید:\n*(هوش مصنوعی آن را اصلاح و دسته‌بندی می‌کند)*")
+    await update.message.reply_text("📝 **توضیحات** و شرایط شغل را بنویسید:\n*(هوش مصنوعی آن را اصلاح و حرفه‌ای می‌کند)*")
     return JOB_DESC
 
 async def get_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -185,14 +200,15 @@ async def get_desc(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     uid = str(update.effective_user.id)
     contact = update.message.text
-    msg = await update.message.reply_text("⏳ **ایجنت هوش مصنوعی در حال پردازش...**")
+    msg = await update.message.reply_text("⏳ **ایجنت AI در حال پردازش و بهبود آگهی شماست...**")
     
-    # ایجنت اصلاح و دسته‌بندی
-    sys_prompt = "Fix spelling and categorize into: IT, Sales, Engineering, Medical, Education, Admin, Services, Other. Output JSON: {'title':'','desc':'','category':''}"
+    # AI Processing
+    sys_prompt = "Fix spelling, write professionally, and categorize into: IT, Sales, Engineering, Medical, Education, Admin, Services, Other. Output JSON: {'title':'','desc':'','category':''}"
     res = await ai_request(sys_prompt, f"Title:{context.user_data['title']}\nDesc:{context.user_data['desc']}")
     
     try:
-        data = json.loads(res[res.find('{'):res.rfind('}')+1])
+        clean_res = res[res.find('{'):res.rfind('}')+1]
+        data = json.loads(clean_res)
         title, desc, cat = data.get('title'), data.get('desc'), data.get('category', 'Other')
     except:
         title, desc, cat = context.user_data['title'], context.user_data['desc'], "Other"
@@ -206,18 +222,19 @@ async def get_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
     }
     await db.save()
 
-    # ارسال به کانال
+    # Publish
     badge = "🌟 **ویژه** 🌟\n" if is_vip else ""
-    text = f"{badge}💼 **فرصت شغلی**\n🔹 {title}\n🏢 {context.user_data['company']}\n🗂 {cat}\n\n📝 {desc}\n📞 {contact}"
+    text = f"{badge}💼 **فرصت شغلی**\n\n🔹 **عنوان:** {title}\n🏢 **شرکت:** {context.user_data['company']}\n🗂 **دسته:** {cat}\n\n📝 **شرح:**\n{desc}\n\n📞 **تماس:** {contact}"
     
     channel_msg = await context.bot.send_message(MAIN_CHANNEL_ID, text, parse_mode=ParseMode.MARKDOWN)
     if is_vip: await context.bot.pin_chat_message(MAIN_CHANNEL_ID, channel_msg.message_id)
 
-    await msg.edit_text("✅ آگهی شما با موفقیت در کانال منتشر شد!")
+    await msg.edit_text("✅ آگهی شما با موفقیت توسط هوش مصنوعی بهبود یافت و در کانال منتشر شد!", 
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_start")]]))
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۸. ایجنت ساخت رزومه (مخصوص کارجو)
+# ۹. ایجنت رزومه‌ساز (کارجو)
 # ══════════════════════════════════════════════════════════════════════════════
 async def role_seeker(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -241,16 +258,17 @@ async def get_res_exp(update: Update, context: ContextTypes.DEFAULT_TYPE):
     return RES_CONTACT
 
 async def get_res_contact(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    msg = await update.message.reply_text("⏳ **ایجنت هوش مصنوعی در حال نگارش رزومه شماست...**")
-    prompt = "You are an expert HR. Write a professional, attractive resume in Dari/Farsi based on these details. Make it sound impressive."
+    msg = await update.message.reply_text("⏳ **ایجنت AI در حال نگارش رزومه حرفه‌ای شماست...**")
+    prompt = "You are an expert HR. Write a professional, attractive resume in Dari/Farsi based on these details. Use formatting."
     user_data = f"Name: {context.user_data['res_name']}\nSkills: {context.user_data['res_skills']}\nExp: {context.user_data['res_exp']}\nContact: {update.message.text}"
     
     resume = await ai_request(prompt, user_data)
-    await msg.edit_text(f"✅ **رزومه حرفه‌ای شما آماده شد:**\n\n{resume}\n\n*(می‌توانید این متن را کپی کنید)*")
+    await msg.edit_text(f"✅ **رزومه حرفه‌ای شما آماده شد:**\n\n{resume}\n\n*(می‌توانید این متن را کپی کنید)*", 
+                        reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 منوی اصلی", callback_data="back_start")]]))
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۹. پنل مالک (مخفی از دیگران)
+# ۱۰. پنل مالک
 # ══════════════════════════════════════════════════════════════════════════════
 async def owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
@@ -259,7 +277,7 @@ async def owner_panel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     vip_users = sum(1 for u in db.data["users"].values() if u.get("vip"))
     revenue = db.data["stats"].get("revenue", 0)
     
-    text = f"👑 **پنل درآمد و مدیریت**\n\n💰 درآمد ستاره: {revenue}\n👑 کاربران VIP: {vip_users}\n👥 کل کاربران: {len(db.data['users'])}"
+    text = f"👑 **پنل درآمد و مدیریت**\n\n💰 درآمد ستاره: {revenue}\n👑 کاربران VIP: {vip_users}\n👥 کل کاربران: {len(db.data['users'])}\n💼 کل آگهی‌ها: {len(db.data['jobs'])}"
     await q.message.edit_text(text, reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("🔙 بازگشت", callback_data="back_start")]]))
 
 async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -270,20 +288,28 @@ async def back_start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE):
     q = update.callback_query
     await q.answer()
+    context.user_data.clear()
     await q.message.edit_text("❌ عملیات لغو شد. برای شروع مجدد /start را بزنید.")
     return ConversationHandler.END
 
 # ══════════════════════════════════════════════════════════════════════════════
-# ۱۰. اجرای اصلی
+# ۱۱. راه‌اندازی
 # ══════════════════════════════════════════════════════════════════════════════
 def main():
     app = Application.builder().token(BOT_TOKEN).concurrent_updates(True).build()
 
-    # هندلر پرداخت
+    # Payments
     app.add_handler(PreCheckoutQueryHandler(pre_checkout))
     app.add_handler(MessageHandler(filters.SUCCESSFUL_PAYMENT, successful_payment))
 
-    # هندلرهای ثبت آگهی
+    # AI Chat Conversation
+    ai_conv = ConversationHandler(
+        entry_points=[CallbackQueryHandler(ai_chat_start, pattern="^ai_chat_start$")],
+        states={AI_CHAT: [MessageHandler(filters.TEXT & ~filters.COMMAND, ai_chat_handler)]},
+        fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
+    )
+
+    # Job Posting Conversation
     job_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(role_employer, pattern="^role_employer$")],
         states={
@@ -295,7 +321,7 @@ def main():
         fallbacks=[CallbackQueryHandler(cancel, pattern="^cancel$")]
     )
 
-    # هندلرهای ساخت رزومه
+    # Resume Conversation
     res_conv = ConversationHandler(
         entry_points=[CallbackQueryHandler(role_seeker, pattern="^role_seeker$")],
         states={
@@ -308,14 +334,14 @@ def main():
     )
 
     app.add_handler(CommandHandler("start", start))
+    app.add_handler(ai_conv)
     app.add_handler(job_conv)
     app.add_handler(res_conv)
-    app.add_handler(CallbackQueryHandler(check_join, pattern="^check_join$"))
     app.add_handler(CallbackQueryHandler(buy_vip, pattern="^buy_vip$"))
     app.add_handler(CallbackQueryHandler(owner_panel, pattern="^owner_panel$"))
     app.add_handler(CallbackQueryHandler(back_start, pattern="^back_start$"))
 
-    logger.info("🚀 SaaS Platform Started!")
+    logger.info("🚀 SaaS Platform v7.0 Started!")
     app.run_polling(allowed_updates=Update.ALL_TYPES, drop_pending_updates=True)
 
 if __name__ == "__main__":
