@@ -1,18 +1,12 @@
-name: Run Telegram Job Finder Bot
+name: Run Live Clock Userbot
 
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
   schedule:
     - cron: "0 */6 * * *"
 
-concurrency:
-  group: job-finder-bot
-  cancel-in-progress: false
-
 jobs:
-  run-bot:
+  run-clock:
     runs-on: ubuntu-latest
     timeout-minutes: 350
     steps:
@@ -24,29 +18,23 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install deps
+      - name: Install dependencies
         run: pip install -r requirements.txt
 
-      - name: Run bot for ~5h25m
+      - name: Run Clock
         env:
-          # در اینجا همه متغیرها را به پایتون می‌دهیم
-          BOT_TOKEN: ${{ secrets.BOT_TOKEN }}
-          GH_PAT: ${{ secrets.GH_PAT }}
-          OWNER_ID: ${{ secrets.OWNER_ID }}
-          MAIN_CHANNEL_ID: ${{ secrets.MAIN_CHANNEL_ID }}
-          MAIN_CHANNEL_LINK: ${{ secrets.MAIN_CHANNEL_LINK }}
-          GITHUB_REPOSITORY: ${{ github.repository }}
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          SESSION_STRING: ${{ secrets.SESSION_STRING }}
+          BASE_NAME: ${{ secrets.BASE_NAME }}
         run: |
-          echo "Starting Job Finder Bot..."
-          # دستور timeout را کمی تغییر دادیم تا اگر خطایی رخ داد، در لاگ‌ها قرمز شود
-          timeout 19500 python bot.py || echo "Bot stopped before time limit"
+          python bot.py || echo "Restarting..."
 
-      - name: Trigger next run (self-redispatch)
+      - name: Trigger next run
         if: always()
         env:
           GH_TOKEN: ${{ secrets.GH_PAT }}
         run: |
-          echo "Dispatching next run..."
           curl -sS -X POST \
             -H "Authorization: Bearer $GH_TOKEN" \
             -H "Accept: application/vnd.github+json" \
