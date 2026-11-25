@@ -23,6 +23,7 @@ jobs:
 
       - name: Run Clock
         env:
+          # انتقال امن متغیرها از Secrets به محیط پایتون
           API_ID: ${{ secrets.API_ID }}
           API_HASH: ${{ secrets.API_HASH }}
           SESSION_STRING: ${{ secrets.SESSION_STRING }}
